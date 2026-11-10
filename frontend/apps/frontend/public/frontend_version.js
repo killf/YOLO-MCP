@@ -1,6 +1,6 @@
 (function () {
   window.__frontend = {
-    "version": "2.0.0",
+    "version": "2.0.4",
     "deps": {
       "@yolo-mcp/audio-annotator-react": "1.9.3",
       "@yolo-mcp/components-react": "1.8.3",

@@ -41,7 +41,7 @@ yolo-mcp --host 127.0.0.1 --port 8000
 在发行包所在目录执行：
 
 ```bash
-python -m pip install ./yolo_mcp-2.0.3-py3-none-any.whl
+python -m pip install ./yolo_mcp-2.0.4-py3-none-any.whl
 yolo-mcp --host 127.0.0.1 --port 8000
 ```
 

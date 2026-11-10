@@ -1,6 +1,6 @@
 [project]
 name = "yolo-mcp"
-version = "2.0.3"
+version = "2.0.4"
 description = "YOLO MCP local image annotation and YOLO training"
 dynamic = ["readme"]
 license = { text = "Apache-2.0" }
