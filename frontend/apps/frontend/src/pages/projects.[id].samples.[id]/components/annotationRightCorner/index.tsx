@@ -19,6 +19,8 @@ import { autoLabelSample, updateSampleState, updateSampleAnnotationResult } from
 import { message } from '@/StaticAnt';
 import useMe from '@/hooks/useMe';
 import { UserAvatar } from '@/components/UserAvatar';
+import AutoLabelButton from '@/components/AutoLabelButton';
+import type { AutoLabelSelection } from '@/api/services/samples';
 import { generateDefaultValues } from '@/utils/generateGlobalToolDefaultValues';
 
 import AnnotationContext from '../../annotation.context';
@@ -389,26 +391,29 @@ const AnnotationRightCorner = ({ noSave, fetchNext, totalSize, isLastPage }: Ann
     saveCurrentSample,
   ]);
 
-  const handleAutoLabel = useCallback(async () => {
-    if (noSave || !isMeTheCurrentUser || !projectId || !sampleId || project?.media_type !== MediaType.IMAGE) {
-      return;
-    }
-
-    setIsAutoLabeling(true);
-    try {
-      const response = await autoLabelSample(+projectId, +sampleId);
-      await revalidator.revalidate();
-      if (response.data.warning_message) {
-        message.warning(response.data.warning_message);
-      } else {
-        message.success(t('aiAutoLabelSuccess'));
+  const handleAutoLabel = useCallback(
+    async (selection: AutoLabelSelection) => {
+      if (noSave || !isMeTheCurrentUser || !projectId || !sampleId || project?.media_type !== MediaType.IMAGE) {
+        return;
       }
-    } catch {
-      // 请求层已展示具体原因，保留当前标注供用户重试。
-    } finally {
-      setIsAutoLabeling(false);
-    }
-  }, [isMeTheCurrentUser, noSave, revalidator, sampleId, t, project?.media_type, projectId]);
+
+      setIsAutoLabeling(true);
+      try {
+        const response = await autoLabelSample(+projectId, +sampleId, selection);
+        await revalidator.revalidate();
+        if (response.data.warning_message) {
+          message.warning(response.data.warning_message);
+        } else {
+          message.success(t('aiAutoLabelSuccess'));
+        }
+      } catch {
+        // 请求层已展示具体原因，保留当前标注供用户重试。
+      } finally {
+        setIsAutoLabeling(false);
+      }
+    },
+    [isMeTheCurrentUser, noSave, revalidator, sampleId, t, project?.media_type, projectId],
+  );
 
   const handlePrevSample = useCallback(async () => {
     if (sampleIndex === 0) {
@@ -550,16 +555,19 @@ const AnnotationRightCorner = ({ noSave, fetchNext, totalSize, isLastPage }: Ann
         )}
       </FlexLayout>
       {project?.media_type === MediaType.IMAGE && (
-        <Button
+        <AutoLabelButton
+          key={projectId}
+          project={project}
           type="text"
-          onClick={commonController.debounce(handleAutoLabel, 100)}
-          disabled={isGlobalLoading || isAutoLabeling || !isMeTheCurrentUser}
+          onRun={handleAutoLabel}
+          loading={isAutoLabeling}
+          disabled={noSave || isGlobalLoading || !isMeTheCurrentUser}
         >
           <FlexLayout items="center" gap="0.5rem">
             <SparklesIcon />
             {isAutoLabeling ? t('aiAutoLabeling') : t('aiAutoLabel')}
           </FlexLayout>
-        </Button>
+        </AutoLabelButton>
       )}
       {isSampleSkipped ? (
         <Button

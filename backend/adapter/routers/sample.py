@@ -14,6 +14,7 @@ from backend.dependencies.user import get_current_user
 from backend.application.service import sample as service
 from backend.application.service import auto_label as auto_label_service
 from backend.application.command.sample import PatchSampleCommand
+from backend.application.command.sample import AutoLabelCommand
 from backend.application.command.sample import CreateSampleCommand
 from backend.application.command.sample import DeleteSampleCommand
 from backend.application.response.base import OkResp
@@ -171,6 +172,7 @@ async def update(
 async def auto_label(
     project_id: int,
     sample_id: int,
+    cmd: AutoLabelCommand | None = None,
     authorization: HTTPAuthorizationCredentials = Security(security),
     db: Session = Depends(db_module.get_db),
     current_user: User = Depends(get_current_user),
@@ -180,6 +182,7 @@ async def auto_label(
         project_id=project_id,
         sample_id=sample_id,
         current_user=current_user,
+        cmd=cmd,
     )
     return OkResp[AutoLabelResponse](data=data)
 
@@ -191,6 +194,7 @@ async def auto_label(
 )
 async def create_auto_label_job(
     project_id: int,
+    cmd: AutoLabelCommand | None = None,
     authorization: HTTPAuthorizationCredentials = Security(security),
     db: Session = Depends(db_module.get_db),
     current_user: User = Depends(get_current_user),
@@ -199,6 +203,7 @@ async def create_auto_label_job(
         db=db,
         project_id=project_id,
         current_user=current_user,
+        cmd=cmd,
     )
     return OkResp[AutoLabelJobResponse](data=data)
 

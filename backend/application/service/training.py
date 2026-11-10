@@ -67,7 +67,7 @@ def _response(run: TrainingRun) -> TrainingRunResponse:
             .path(f"projects/{run.project_id}/models/{run.model_name}")
             .is_file()
         ),
-        log_available=(_workspace(run.project_id, run.id) / "console.log").is_file(),
+        log_available=(_workspace(run.project_id, run.id) / "train.log").is_file(),
         pause_available=run.status == TrainingStatus.RUNNING.value
         and "," not in settings.DEVICE,
         resume_available=(
@@ -216,7 +216,7 @@ def _workspace(project_id: int, run_id: int) -> Path:
 def get_log(db: Session, project_id: int, run_id: int, user: User) -> str:
     """仅返回本项目训练日志的末尾 64 KiB，避免轮询读取无限增长的文件。"""
     get_run(db, project_id, run_id, user)
-    path = _workspace(project_id, run_id) / "console.log"
+    path = _workspace(project_id, run_id) / "train.log"
     if not path.exists():
         return ""
     with path.open("rb") as stream:
@@ -422,6 +422,7 @@ async def _run(run_id: int) -> None:
                 {
                     "YOLO_AUTOINSTALL": "false",
                     "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
                     "YOLO_CONFIG_DIR": str(get_storage().path(".ultralytics")),
                 }
             )
@@ -474,7 +475,8 @@ async def _run(run_id: int) -> None:
                         json.dumps(parameters["extra_params"], allow_nan=False),
                     ]
                 )
-            with (workspace / "console.log").open("ab" if resuming else "wb") as output:
+            args.append("--log-to-stdout")
+            with (workspace / "train.log").open("ab" if resuming else "wb") as output:
                 process = await asyncio.create_subprocess_exec(
                     *args,
                     cwd=str(Path(__file__).resolve().parents[3]),

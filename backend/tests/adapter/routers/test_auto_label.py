@@ -1,4 +1,5 @@
 import json
+from threading import Event
 from contextlib import contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -332,3 +333,159 @@ def test_batch_uses_algorithm_snapshot_after_project_selection_changes(
     assert db.get(AutoLabelJob, job_id).status == "COMPLETED"
     record = db.query(ProjectPreAnnotation).one()
     assert json.loads(record.data)["meta"]["provider"] == "florence2"
+
+
+def test_request_model_switch_preserves_default_and_logs_selection(
+    client, testuser_token_headers, ai_project, monkeypatch
+):
+    """从请求切换算法，核对推理、预标注来源、默认值和后端日志。"""
+    from backend.inference import Detection
+
+    project_id, sample_id = ai_project
+    base = f"/api/v1/projects/{project_id}"
+    loads = []
+
+    def load(algorithm, name, device):
+        loads.append((algorithm, name))
+        return SimpleNamespace(
+            predict=lambda image, labels: [Detection([1, 2, 7, 8], labels[0])]
+        )
+
+    monkeypatch.setattr(auto_label, "load_detector", load)
+    messages = []
+    sink = auto_label.logger.add(lambda message: messages.append(str(message)))
+    try:
+        response = client.post(
+            base + f"/samples/{sample_id}/auto_label",
+            headers=testuser_token_headers,
+            json={"algorithm": "florence2", "model_name": "microsoft/Florence-2-base"},
+        )
+    finally:
+        auto_label.logger.remove(sink)
+    assert response.status_code == 200, response.text
+    assert loads == [("florence2", "microsoft/Florence-2-base")]
+    assert response.json()["data"]["model"] == "microsoft/Florence-2-base"
+    project = client.get(base, headers=testuser_token_headers).json()["data"]
+    assert project["ai_algorithm"] == "yolo"
+    assert project["ai_model_name"] == "20261107-1.pt"
+    assert any(
+        "AI 标注模型选择" in message
+        and f"project_id={project_id}" in message
+        and "yolo/20261107-1.pt" in message
+        and "florence2/microsoft/Florence-2-base" in message
+        for message in messages
+    )
+    payload = json.loads(
+        client.get(
+            base + "/pre_annotations",
+            headers=testuser_token_headers,
+            params={"sample_name": "sample.png", "page": 0},
+        ).json()["data"][0]["data"]
+    )
+    assert payload["meta"]["provider"] == "florence2"
+    assert payload["meta"]["model"] == "microsoft/Florence-2-base"
+
+
+def test_request_switches_project_yolo_weights(
+    client, testuser_token_headers, ai_project, monkeypatch
+):
+    """同算法切换项目权重后，实际加载路径和返回模型均使用本次选择。"""
+    import sys
+
+    project_id, sample_id = ai_project
+    storage = get_storage()
+    path = f"projects/{project_id}/models/selected.pt"
+    storage.save_bytes(b"synthetic model", path)
+    loaded = []
+
+    def load(weights):
+        loaded.append(weights)
+        prediction = SimpleNamespace(
+            names={0: "Object"},
+            boxes=SimpleNamespace(
+                xyxy=Vector([[1, 2, 7, 8]]), cls=Vector([0]), conf=Vector([0.9])
+            ),
+        )
+        return SimpleNamespace(predict=lambda *args, **kwargs: [prediction])
+
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=load))
+    response = client.post(
+        f"/api/v1/projects/{project_id}/samples/{sample_id}/auto_label",
+        headers=testuser_token_headers,
+        json={"algorithm": "yolo", "model_name": "selected.pt"},
+    )
+    assert response.status_code == 200, response.text
+    assert loaded == [str(storage.path(path))]
+    assert response.json()["data"]["model"] == "selected.pt"
+
+
+def test_batch_request_freezes_model_before_later_selection(
+    client, testuser_token_headers, ai_project, monkeypatch, db
+):
+    """两个批次选择不同模型，执行首个批次仍使用提交时的模型快照。"""
+    from backend.inference import Detection
+
+    project_id, sample_id = ai_project
+    queued = Event()
+    run_batch = auto_label._run_batch
+    monkeypatch.setattr(auto_label, "_run_batch", lambda *_args: queued.set())
+    base = f"/api/v1/projects/{project_id}"
+    jobs = []
+    for algorithm, name in [
+        ("florence2", "microsoft/Florence-2-base"),
+        ("sam3", "facebook/sam3"),
+    ]:
+        queued.clear()
+        response = client.post(
+            base + "/auto_label_job",
+            headers=testuser_token_headers,
+            json={"algorithm": algorithm, "model_name": name},
+        )
+        assert response.status_code == 200, response.text
+        assert queued.wait(5)
+        jobs.append(response.json()["data"]["id"])
+    assert jobs[0] != jobs[1]
+    loads = []
+
+    def load(algorithm, name, device):
+        loads.append((algorithm, name))
+        return SimpleNamespace(
+            predict=lambda image, labels: [Detection([1, 2, 7, 8], labels[0])]
+        )
+
+    monkeypatch.setattr(auto_label, "load_detector", load)
+    monkeypatch.setattr(auto_label, "SessionLocal", TestingSessionLocal)
+    run_batch(jobs[0], [sample_id])
+    assert loads == [("florence2", "microsoft/Florence-2-base")]
+    db.expire_all()
+    assert db.get(AutoLabelJob, jobs[0]).status == "COMPLETED"
+    assert db.get(AutoLabelJob, jobs[1]).model_name == "facebook/sam3"
+    assert (
+        client.get(base, headers=testuser_token_headers).json()["data"]["ai_algorithm"]
+        == "yolo"
+    )
+
+
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize(
+    "selection,status",
+    [
+        ({"algorithm": "yolo", "model_name": "../outside.pt"}, 422),
+        ({"algorithm": "yolo", "model_name": "absent.pt"}, 404),
+        ({"algorithm": "florence2", "model_name": "facebook/sam3"}, 422),
+        ({"algorithm": "unknown", "model_name": "model.pt"}, 422),
+        ({"algorithm": "yolo", "model_name": ""}, 422),
+    ],
+)
+def test_request_rejects_invalid_model_before_starting(
+    client, testuser_token_headers, ai_project, batch, selection, status, db
+):
+    project_id, sample_id = ai_project
+    suffix = "/auto_label_job" if batch else f"/samples/{sample_id}/auto_label"
+    response = client.post(
+        f"/api/v1/projects/{project_id}{suffix}",
+        headers=testuser_token_headers,
+        json=selection,
+    )
+    assert response.status_code == status, response.text
+    assert db.query(AutoLabelJob).count() == 0

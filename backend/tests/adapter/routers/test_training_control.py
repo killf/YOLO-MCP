@@ -135,6 +135,8 @@ def test_worker_pauses_and_resumes_same_checkpoint(training_project, db, monkeyp
 
     async def spawn(*args, **kwargs):
         launches.append(args)
+        assert "--log-to-stdout" in args
+        assert kwargs["env"]["PYTHONIOENCODING"] == "utf-8"
         kwargs["stdout"].write(b"epoch log\n")
         result = Path(args[args.index("--result-file") + 1])
         if len(launches) == 1:
@@ -170,7 +172,33 @@ def test_worker_pauses_and_resumes_same_checkpoint(training_project, db, monkeyp
     db.expire_all()
     assert db.get(TrainingRun, run_id).status == "SUCCEEDED"
     assert db.get(TrainingRun, run_id).started_at == started_at
-    assert (workspace / "console.log").read_bytes() == b"epoch log\nepoch log\n"
+    assert (workspace / "train.log").read_bytes() == b"epoch log\nepoch log\n"
+    assert not (workspace / "console.log").exists()
+
+
+def test_real_training_process_captures_failure_once(training_project, db, monkeypatch):
+    """真实子进程在参数校验阶段失败，输出仍完整且只写入 train.log。"""
+    with begin_transaction(db):
+        run = TrainingRun(
+            project_id=training_project,
+            created_by=1,
+            initial_model="yolo26n.pt",
+            parameters=json.dumps(
+                {"epochs": 1, "imgsz": 64, "batch": 1, "unfreeze_steps": 0}
+            ),
+            status="PENDING",
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+    monkeypatch.setattr(training, "SessionLocal", TestingSessionLocal)
+    asyncio.run(training._run(run_id))
+    db.expire_all()
+    assert db.get(TrainingRun, run_id).status == "FAILED"
+    workspace = get_storage().path(f"projects/{training_project}/runs/{run_id}")
+    content = (workspace / "train.log").read_text(encoding="utf-8")
+    assert content.count("解冻步数必须为正整数") == 1
+    assert not (workspace / "console.log").exists()
 
 
 @pytest.mark.parametrize(

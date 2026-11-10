@@ -78,8 +78,17 @@ export async function updateSampleAnnotationResult(
   );
 }
 
-export async function autoLabelSample(projectId: number, sampleId: number): Promise<OkRespAutoLabelResponse> {
-  return await request.post(`/v1/projects/${projectId}/samples/${sampleId}/auto_label`, undefined, {
+export interface AutoLabelSelection {
+  algorithm: 'yolo' | 'florence2' | 'grounding_dino_sam' | 'sam3';
+  model_name: string;
+}
+
+export async function autoLabelSample(
+  projectId: number,
+  sampleId: number,
+  selection?: AutoLabelSelection,
+): Promise<OkRespAutoLabelResponse> {
+  return await request.post(`/v1/projects/${projectId}/samples/${sampleId}/auto_label`, selection, {
     timeout: 5 * 60 * 1000,
     params: {
       sample_id: sampleId,
@@ -87,8 +96,11 @@ export async function autoLabelSample(projectId: number, sampleId: number): Prom
   });
 }
 
-export async function createAutoLabelJob(projectId: number): Promise<{ data: AutoLabelJobResponse }> {
-  return await request.post(`/v1/projects/${projectId}/auto_label_job`);
+export async function createAutoLabelJob(
+  projectId: number,
+  selection?: AutoLabelSelection,
+): Promise<{ data: AutoLabelJobResponse }> {
+  return await request.post(`/v1/projects/${projectId}/auto_label_job`, selection);
 }
 
 export async function getAutoLabelJobStatus(projectId: number, jobId: number): Promise<{ data: AutoLabelJobResponse }> {

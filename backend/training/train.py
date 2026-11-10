@@ -312,6 +312,7 @@ def run_training(
     result_file: Path | None = None,
     models_dir: Path | None = None,
     resume_checkpoint: Path | None = None,
+    log_to_stdout: bool = False,
 ) -> int:
     """冻结本地输入并训练，将最佳权重复制到项目 models/，日志留在 runs/。"""
     dataset = dataset.resolve()
@@ -325,16 +326,18 @@ def run_training(
         run_dir = work_dir.resolve()
         run_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. 独立进程内同时记录控制台和训练日志，便于页面查看。
-    with (
-        (run_dir / "train.log").open(
-            "a" if resume_checkpoint else "w", encoding="utf-8", buffering=1
-        ) as logfile,
-        Tee(sys.stdout, logfile) as stdout,
-        Tee(sys.stderr, logfile) as stderr,
-        contextlib.redirect_stdout(stdout),
-        contextlib.redirect_stderr(stderr),
-    ):
+    # 1. 页面训练由父进程记录全部输出；独立调用自行记录，避免重复写入。
+    with contextlib.ExitStack() as stack:
+        if not log_to_stdout:
+            logfile = stack.enter_context(
+                (run_dir / "train.log").open(
+                    "a" if resume_checkpoint else "w", encoding="utf-8", buffering=1
+                )
+            )
+            stdout = stack.enter_context(Tee(sys.stdout, logfile))
+            stderr = stack.enter_context(Tee(sys.stderr, logfile))
+            stack.enter_context(contextlib.redirect_stdout(stdout))
+            stack.enter_context(contextlib.redirect_stderr(stderr))
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -481,6 +484,11 @@ def main() -> int:
         help="将训练编号、模型地址和指标写入 JSON，供页面训练记录读取",
     )
     parser.add_argument(
+        "--log-to-stdout",
+        action="store_true",
+        help="仅向控制台输出日志，由调用进程统一写入 train.log；默认自行保存日志",
+    )
+    parser.add_argument(
         "--extra-params",
         default="{}",
         help='附加训练参数的 JSON 对象，例如 \'{"lr0": 0.001, "amp": false}\'',
@@ -584,6 +592,7 @@ def main() -> int:
     work_dir = parameters.pop("work_dir")
     result_file = parameters.pop("result_file")
     resume_checkpoint = parameters.pop("resume_checkpoint")
+    log_to_stdout = parameters.pop("log_to_stdout")
     extra_params = parameters.pop("extra_params")
     parameters = {key: value for key, value in parameters.items() if value is not None}
 
@@ -608,7 +617,13 @@ def main() -> int:
     os.environ.setdefault("YOLO_AUTOINSTALL", "false")
     try:
         return run_training(
-            dataset, parameters, work_dir, result_file, models_dir, resume_checkpoint
+            dataset,
+            parameters,
+            work_dir,
+            result_file,
+            models_dir,
+            resume_checkpoint,
+            log_to_stdout=log_to_stdout,
         )
     except (Exception, KeyboardInterrupt) as exc:
         print(error_text(exc), file=sys.stderr)
