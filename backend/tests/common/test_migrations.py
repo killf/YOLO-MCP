@@ -191,7 +191,7 @@ from backend.main import app
 database = Path(sys.argv[1])
 assert not database.exists()
 with TestClient(app) as client:
-    assert client.get("/openapi.json").json()["info"]["version"] == "2.0.3"
+    assert client.get("/openapi.json").json()["info"]["version"] == "2.0.4"
     with sqlite3.connect(database) as connection:
         connection.execute(
             "INSERT INTO auto_label_job (id, status, model_name) "

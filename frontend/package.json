@@ -5,7 +5,7 @@
     "packages/*",
     "apps/*"
   ],
-  "version": "2.0.3",
+  "version": "2.0.4",
   "scripts": {
     "build": "pnpm --filter @yolo-mcp/interface --filter @yolo-mcp/i18n --filter @yolo-mcp/formatter --filter @yolo-mcp/image --filter @yolo-mcp/components-react --filter @yolo-mcp/image-annotator-react --filter @yolo-mcp/audio-react --filter @yolo-mcp/video-react --filter @yolo-mcp/audio-annotator-react --filter @yolo-mcp/video-annotator-react build",
     "clean": "pnpm --filter @yolo-mcp/interface --filter @yolo-mcp/i18n --filter @yolo-mcp/formatter --filter @yolo-mcp/image --filter @yolo-mcp/components-react --filter @yolo-mcp/image-annotator-react --filter @yolo-mcp/audio-react --filter @yolo-mcp/video-react --filter @yolo-mcp/audio-annotator-react --filter @yolo-mcp/video-annotator-react clean",

@@ -170,6 +170,6 @@ uv build --project backend --out-dir dist
 在目标环境安装生成的 wheel：
 
 ```bash
-python -m pip install ./dist/yolo_mcp-2.0.3-py3-none-any.whl
+python -m pip install ./dist/yolo_mcp-2.0.4-py3-none-any.whl
 yolo-mcp --host 127.0.0.1 --port 8000
 ```
