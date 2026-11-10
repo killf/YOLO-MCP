@@ -1,0 +1,25 @@
+{
+  "name": "@yolo-mcp/interface",
+  "version": "1.3.1",
+  "description": "typescript interfaces for YOLO MCP annotations",
+  "types": "./src/index.ts",
+  "typings": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/killf/LabelS"
+  },
+  "scripts": {
+    "dev": "tsc -d --emitDeclarationOnly -w",
+    "build": "tsc -d --emitDeclarationOnly",
+    "docs": "typedoc --out docs",
+    "clean": "rimraf ./node_modules"
+  },
+  "license": "Apache-2.0",
+  "author": {
+    "name": "gary",
+    "email": "shenguanlin@pjlab.org.cn"
+  },
+  "devDependencies": {
+    "typescript": "4.8.4"
+  }
+}

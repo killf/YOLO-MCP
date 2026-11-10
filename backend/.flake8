@@ -1,0 +1,7 @@
+[flake8]
+max-line-length = 88
+extend-exclude = .venv, __pycache__, statics
+
+# 隔离测试配置必须先于应用导入设置，避免触及开发数据库。
+per-file-ignores =
+    tests/conftest.py:E402

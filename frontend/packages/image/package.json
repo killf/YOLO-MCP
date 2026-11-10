@@ -1,0 +1,56 @@
+{
+  "name": "@yolo-mcp/image",
+  "version": "1.5.2",
+  "description": "Image annotation tool for YOLO MCP",
+  "author": {
+    "name": "GaryShen",
+    "email": "grinson50@gmail.com"
+  },
+  "license": "Apache-2.0",
+  "typings": "./src/index.ts",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "require": "./src/index.ts"
+    }
+  },
+  "homepage": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/killf/LabelS.git"
+  },
+  "scripts": {
+    "dev": "rollup -c rollup.config.js -w ",
+    "build": "vite build && npm run build:types",
+    "build:types": "tsc -d --emitDeclarationOnly",
+    "clean": "rimraf ./node_modules"
+  },
+  "dependencies": {
+    "color": "^4.2.3",
+    "eventemitter3": "^5.0.0",
+    "lodash.clonedeep": "^4.5.0",
+    "polygon-clipping": "^0.15.7",
+    "rbush": "^3.0.1"
+  },
+  "devDependencies": {
+    "@yolo-mcp/interface": "workspace:*",
+    "@types/color": "^3.0.6",
+    "@types/lodash.clonedeep": "^4.5.9",
+    "@types/lodash.mapvalues": "^4.6.9",
+    "@types/node": "^12.20.55",
+    "@types/rbush": "^3.0.3",
+    "@types/uuid": "^9.0.0",
+    "esbuild": "^0.11.0",
+    "rimraf": "^3.0.2",
+    "rollup": "^2.43.1",
+    "rollup-plugin-esbuild": "^3.0.2",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
+    "typescript": "4.8.4",
+    "vite": "^4.1.1",
+    "vite-tsconfig-paths": "^3.5.0"
+  }
+}

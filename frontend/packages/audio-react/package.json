@@ -1,0 +1,47 @@
+{
+  "name": "@yolo-mcp/audio-react",
+  "version": "1.6.3",
+  "description": "YOLO MCP audio annotation component for react",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "vite build && npm run build:types",
+    "build:types": "tsc -d --emitDeclarationOnly",
+    "dev": "vite --port 3001 -c vite.config.app.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/killf/LabelS"
+  },
+  "author": {
+    "name": "gary",
+    "email": "shenguanlin@pjlab.org.cn"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@yolo-mcp/interface": "workspace:*",
+    "@types/react": "^18.2.20",
+    "@vitejs/plugin-react": "^3.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
+    "typescript": "4.8.4",
+    "vite": "^4.1.1",
+    "vite-plugin-ejs": "^1.6.4",
+    "vite-plugin-svgr": "^2.4.0",
+    "vite-plugin-ts-mono-alias": "^1.1.7",
+    "vite-tsconfig-paths": "^3.5.0"
+  },
+  "dependencies": {
+    "@yolo-mcp/components-react": "workspace:*",
+    "polished": "^4.2.2",
+    "react-hotkeys-hook": "^4.4.1",
+    "styled-components": "^6.1.15",
+    "wavesurfer.js": "^7.3.2"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

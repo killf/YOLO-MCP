@@ -1,0 +1,678 @@
+from sqlalchemy.orm import Session
+from fastapi.testclient import TestClient
+
+from backend.common.config import settings
+from backend.common.db import begin_transaction
+from backend.domain.models.project import Project
+from backend.domain.models.user import User
+from backend.adapter.persistence import crud_user
+from backend.adapter.persistence import crud_project
+
+
+class TestClassProjectRouter:
+    def test_create_project_successful(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+
+        # run
+        r = client.post(
+            f"{settings.API_V1_STR}/projects", headers=testuser_token_headers, json=data
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 201
+        assert json["data"]["id"] > 0
+        assert json["data"]["created_by"]["id"] > 0
+        assert json["data"]["status"] == "DRAFT"
+
+    def test_create_project_no_authentication(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+
+        # run
+        r = client.post(
+            f"{settings.API_V1_STR}/projects", headers=testuser_token_headers, json=data
+        )
+
+        # check
+        assert r.status_code == 201
+
+    def test_project_list(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        current_user = crud_user.get_user_by_username(
+            db=db, username="test@example.com"
+        )
+        page = 0
+        size = 10
+        with begin_transaction(db):
+            for i in range(15):
+                crud_project.create(
+                    db=db,
+                    project=Project(
+                        name="name",
+                        description="description",
+                        tips="tips",
+                        created_by=current_user.id,
+                        updated_by=current_user.id,
+                    ),
+                )
+
+        # run
+        r = client.get(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            params={"page": page, "size": size},
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 200
+        assert json["meta_data"]["total"] == 15
+        assert len(json["data"]) == 10
+
+    def test_project_get(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+            "config": "config",
+            "media_type": "IMAGE",
+        }
+        project = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+
+        # run
+        project_id = project.json()["data"]["id"]
+        r = client.get(
+            f"{settings.API_V1_STR}/projects/{project_id}",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()["data"]
+        assert r.status_code == 200
+        assert json["name"] == "project name"
+        assert json["created_by"]["id"] > 0
+
+    def test_project_get_not_found(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        # run
+        r = client.get(
+            f"{settings.API_V1_STR}/projects/0",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 404
+        assert json["err_code"] == 50002
+
+    def test_project_update(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        for_update_project_data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+            "config": "config",
+            "media_type": "IMAGE",
+        }
+        for_update_project = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=for_update_project_data,
+        )
+        for_updated_project_data = {
+            "name": "new name",
+            "description": "new description",
+            "tips": "new tips",
+            "config": (
+                '{"tools":[{"tool":"rectTool","config":{"attributes":'
+                '[{"key":"Object","value":"object"}]}}]}'
+            ),
+            "media_type": "IMAGE",
+        }
+
+        # run
+        project_id = for_update_project.json()["data"]["id"]
+        updated_project = client.patch(
+            f"{settings.API_V1_STR}/projects/{project_id}",
+            headers=testuser_token_headers,
+            json=for_updated_project_data,
+        )
+
+        # check
+        json = updated_project.json()
+        assert json["data"]["name"] == "new name"
+        assert json["data"]["description"] == "new description"
+        assert json["data"]["tips"] == "new tips"
+        assert json["data"]["config"] == for_updated_project_data["config"]
+        assert json["data"]["media_type"] == "IMAGE"
+
+    def test_project_update_forbidden_for_non_owner(
+        self,
+        client: TestClient,
+        testuser_token_headers: dict,
+        db: Session,
+        other_user_id,
+    ) -> None:
+        # project owned by another user
+        with begin_transaction(db):
+            project = crud_project.create(
+                db=db,
+                project=Project(
+                    name="other",
+                    description="d",
+                    tips="t",
+                    created_by=other_user_id,
+                    updated_by=other_user_id,
+                ),
+            )
+
+        r = client.patch(
+            f"{settings.API_V1_STR}/projects/{project.id}",
+            headers=testuser_token_headers,
+            json={
+                "name": "hijacked",
+                "description": "x",
+                "tips": "y",
+                "config": "c",
+                "media_type": "IMAGE",
+            },
+        )
+        assert r.status_code == 403
+
+    def test_project_update_no_found_project(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        for_updated_project_data = {
+            "name": "new name",
+            "description": "new description",
+            "tips": "new tips",
+            "config": (
+                '{"tools":[{"tool":"rectTool","config":{"attributes":'
+                '[{"key":"Object","value":"object"}]}}]}'
+            ),
+            "media_type": "IMAGE",
+        }
+
+        # run
+        updated_project = client.patch(
+            f"{settings.API_V1_STR}/projects/0",
+            headers=testuser_token_headers,
+            json=for_updated_project_data,
+        )
+
+        # check
+        json = updated_project.json()
+        assert updated_project.status_code == 404
+        assert json["err_code"] == 50002
+
+    def test_project_update_no_config(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        for_update_project_data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        for_update_project = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=for_update_project_data,
+        )
+        for_updated_project_data = {
+            "name": "new name",
+            "description": "new description",
+            "tips": "new tips",
+            "config": (
+                '{"tools":[{"tool":"rectTool","config":{"attributes":'
+                '[{"key":"Object","value":"object"}]}}]}'
+            ),
+        }
+
+        # run
+        project_id = for_update_project.json()["data"]["id"]
+        updated_project = client.patch(
+            f"{settings.API_V1_STR}/projects/{project_id}",
+            headers=testuser_token_headers,
+            json=for_updated_project_data,
+        )
+
+        # check
+        json = updated_project.json()
+        assert json["data"]["name"] == "new name"
+        assert json["data"]["description"] == "new description"
+        assert json["data"]["tips"] == "new tips"
+        assert json["data"]["config"] == for_updated_project_data["config"]
+        assert json["data"]["media_type"] == "IMAGE"
+
+    def test_project_add_annotation_config(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        for_update_project_data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        for_update_project = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=for_update_project_data,
+        )
+        for_updated_project_data = {
+            "name": "new name",
+            "description": "new description",
+            "tips": "new tips",
+            "config": (
+                '{"tools":[{"tool":"rectTool","config":{"attributes":'
+                '[{"key":"Object","value":"object"}]}}]}'
+            ),
+            "media_type": "IMAGE",
+        }
+
+        # run
+        project_id = for_update_project.json()["data"]["id"]
+        updated_project = client.patch(
+            f"{settings.API_V1_STR}/projects/{project_id}",
+            headers=testuser_token_headers,
+            json=for_updated_project_data,
+        )
+
+        # check
+        json = updated_project.json()
+        assert json["data"]["name"] == "new name"
+        assert json["data"]["description"] == "new description"
+        assert json["data"]["tips"] == "new tips"
+        assert json["data"]["config"] == for_updated_project_data["config"]
+        assert json["data"]["media_type"] == "IMAGE"
+        assert json["data"]["status"] == "CONFIGURED"
+
+    def test_project_delete(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+        current_user = crud_user.get_user_by_username(
+            db=db, username="test@example.com"
+        )
+        with begin_transaction(db):
+            project = crud_project.create(
+                db=db,
+                project=Project(
+                    name="name",
+                    description="description",
+                    tips="tips",
+                    created_by=current_user.id,
+                    updated_by=current_user.id,
+                ),
+            )
+
+        # run
+        r = client.request(
+            "delete",
+            f"{settings.API_V1_STR}/projects/{project.id}",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 200
+        assert json["data"]["ok"] is True
+
+    def test_project_delete_not_found(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+
+        # prepare data
+
+        # run
+        r = client.request(
+            "delete",
+            f"{settings.API_V1_STR}/projects/0",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 404
+        assert json["err_code"] == 50002
+
+    def test_project_delete_no_permission(
+        self,
+        client: TestClient,
+        testuser_token_headers: dict,
+        db: Session,
+        other_user_id,
+    ) -> None:
+
+        # prepare data
+        with begin_transaction(db):
+            project = crud_project.create(
+                db=db,
+                project=Project(
+                    name="name",
+                    description="description",
+                    tips="tips",
+                    created_by=other_user_id,
+                    updated_by=other_user_id,
+                ),
+            )
+
+        # run
+        r = client.request(
+            "delete",
+            f"{settings.API_V1_STR}/projects/{project.id}",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 403
+        assert json["err_code"] == 30001
+
+    def test_project_get_collaborators(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # prepare data
+        data = {
+            "name": "project name",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        # run
+        r = client.get(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        assert r.status_code == 200
+        assert r.json()["data"] == []
+
+    def test_project_add_collaborator(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # prepare data
+        current_user = crud_user.get_user_by_username(
+            db=db, username="test@example.com"
+        )
+        db.rollback()
+        data = {
+            "name": "collaborative project",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        # 拥有者已经有完整权限，不应再作为协作者重复保存。
+        r = client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+            json={"user_id": current_user.id},
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 400
+        assert json["err_code"] == 50003
+
+    def test_project_batch_add_collaborators(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # prepare data
+        current_user = crud_user.get_user_by_username(
+            db=db, username="test@example.com"
+        )
+        # 获取或创建测试用户
+        new_user = crud_user.get_user_by_username(
+            db=db, username="collaborator@example.com"
+        )
+        if not new_user:
+            with begin_transaction(db):
+                new_user = crud_user.create(
+                    db=db,
+                    user=User(
+                        username="collaborator@example.com",
+                        hashed_password="hashed_password",
+                    ),
+                )
+        else:
+            db.rollback()
+
+        data = {
+            "name": "batch collaborative project",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        # run
+        r = client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators/batch_add",
+            headers=testuser_token_headers,
+            json={"user_ids": [current_user.id, new_user.id]},
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 201
+        # 期望只有一个协作者
+        assert len(json["data"]) == 1
+        user_ids = [user["id"] for user in json["data"]]
+        assert new_user.id in user_ids
+
+    def test_project_batch_remove_collaborators(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # prepare data
+        # 获取或创建测试用户
+        new_user = crud_user.get_user_by_username(
+            db=db, username="to_remove@example.com"
+        )
+        if not new_user:
+            with begin_transaction(db):
+                new_user = crud_user.create(
+                    db=db,
+                    user=User(
+                        username="to_remove@example.com",
+                        hashed_password="hashed_password",
+                    ),
+                )
+        else:
+            db.rollback()
+
+        data = {
+            "name": "remove collaborative project",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        # 先添加协作者
+        client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators/batch_add",
+            headers=testuser_token_headers,
+            json={"user_ids": [new_user.id]},
+        )
+
+        # run - 移除协作者
+        r = client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators/batch_remove",
+            headers=testuser_token_headers,
+            json={"user_ids": [new_user.id]},
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 201
+        assert json["data"]["ok"] is True
+
+        # 验证协作者已被移除
+        collaborators = client.get(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+        )
+        assert new_user.id not in [c["id"] for c in collaborators.json()["data"]]
+
+    def test_project_remove_collaborator(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # prepare data
+        # 获取或创建测试用户
+        new_user = crud_user.get_user_by_username(
+            db=db, username="single_remove@example.com"
+        )
+        if not new_user:
+            with begin_transaction(db):
+                new_user = crud_user.create(
+                    db=db,
+                    user=User(
+                        username="single_remove@example.com",
+                        hashed_password="hashed_password",
+                    ),
+                )
+        else:
+            db.rollback()
+
+        data = {
+            "name": "single remove project",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        # 先添加协作者
+        client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+            json={"user_id": new_user.id},
+        )
+
+        # run - 移除单个协作者
+        r = client.delete(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators/{new_user.id}",
+            headers=testuser_token_headers,
+        )
+
+        # check
+        json = r.json()
+        assert r.status_code == 200
+        assert json["data"]["ok"] is True
+
+        # 验证协作者已被移除
+        collaborators = client.get(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+        )
+        assert new_user.id not in [c["id"] for c in collaborators.json()["data"]]
+
+    def test_project_not_found_for_collaborators(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # 测试不存在的项目
+        r1 = client.get(
+            f"{settings.API_V1_STR}/projects/99999/collaborators",
+            headers=testuser_token_headers,
+        )
+        assert r1.status_code == 404
+
+    def test_user_not_found_for_collaborators(
+        self, client: TestClient, testuser_token_headers: dict, db: Session
+    ) -> None:
+        # 测试添加不存在的用户
+
+        data = {
+            "name": "error test project",
+            "media_type": "IMAGE",
+            "description": "project description",
+            "tips": "project tips",
+        }
+        project_response = client.post(
+            f"{settings.API_V1_STR}/projects",
+            headers=testuser_token_headers,
+            json=data,
+        )
+        project_id = project_response.json()["data"]["id"]
+
+        r2 = client.post(
+            f"{settings.API_V1_STR}/projects/{project_id}/collaborators",
+            headers=testuser_token_headers,
+            json={"user_id": 99999},  # 不存在的用户ID
+        )
+        # 验证状态码是4xx，表示客户端错误
+        assert r2.status_code == 404

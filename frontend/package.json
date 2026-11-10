@@ -1,0 +1,88 @@
+{
+  "name": "yolo-mcp",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "version": "2.0.3",
+  "scripts": {
+    "build": "pnpm --filter @yolo-mcp/interface --filter @yolo-mcp/i18n --filter @yolo-mcp/formatter --filter @yolo-mcp/image --filter @yolo-mcp/components-react --filter @yolo-mcp/image-annotator-react --filter @yolo-mcp/audio-react --filter @yolo-mcp/video-react --filter @yolo-mcp/audio-annotator-react --filter @yolo-mcp/video-annotator-react build",
+    "clean": "pnpm --filter @yolo-mcp/interface --filter @yolo-mcp/i18n --filter @yolo-mcp/formatter --filter @yolo-mcp/image --filter @yolo-mcp/components-react --filter @yolo-mcp/image-annotator-react --filter @yolo-mcp/audio-react --filter @yolo-mcp/video-react --filter @yolo-mcp/audio-annotator-react --filter @yolo-mcp/video-annotator-react clean",
+    "build:frontend": "pnpm --filter @yolo-mcp/frontend build",
+    "build:website": "pnpm --filter @yolo-mcp/website build",
+    "lint:frontend": "pnpm lint ./apps/frontend --ext .js,.jsx,.ts,.tsx",
+    "lint:packages": "pnpm lint ./packages --ext .js,.jsx,.ts,.tsx",
+    "lint:style": "stylelint '**/*.less'",
+    "commit": "cz",
+    "docs": "typedoc",
+    "docs-all": "npm run docs --workspaces --if-present",
+    "lint": "node -e \"process.argv.splice(2, 0, '--resolve-plugins-relative-to', require('path').dirname(require.resolve('@shlab/fabric'))); require(require.resolve('eslint/bin/eslint.js', {paths: [require.resolve('@shlab/fabric')]}))\" -- eslint"
+  },
+  "author": "gary-shen",
+  "contributors": [
+    "GaryShen <grinson50@gmail.com>"
+  ],
+  "keywords": [
+    "annotation",
+    "image annotation",
+    "video annotation",
+    "audio annotation",
+    "canvas",
+    "react"
+  ],
+  "homepage": "https://github.com/killf/LabelS",
+  "bugs": {
+    "url": "https://github.com/killf/LabelS",
+    "email": "shenguanlin@pjlab.org.cn"
+  },
+  "main": "index.js",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@commitlint/cli": "8.3.5",
+    "@commitlint/config-conventional": "8.3.4",
+    "@shlab/fabric": "^1.2.1",
+    "commitizen": "^4.2.4",
+    "cz-conventional-changelog": "^3.3.0",
+    "husky": "^8.0.0",
+    "lint-staged": "^10.5.4",
+    "postcss-scss": "^4.0.6",
+    "stylelint": "^14.16.1",
+    "stylelint-prettier": "^2.0.0",
+    "tsc-files": "^1.1.3",
+    "typedoc": "^0.25.2",
+    "eslint": "7.32.0"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": [
+        "lint-staged"
+      ],
+      "commit-msg": "commitlint -E HUSKY_GIT_PARAMS"
+    }
+  },
+  "lint-staged": {
+    "**/*.scss": [
+      "stylelint --fix"
+    ],
+    "packages/**/src/**/*.{ts,tsx}": "tsc-files --noEmit",
+    "apps/frontend/src/**/*.{ts,tsx}": "tsc-files --noEmit",
+    "packages/**/src/**/*.{js,jsx,ts,tsx,json,css,scss,less,md}": [
+      "prettier --check --write"
+    ],
+    "apps/frontend/src/**/*.{js,jsx,ts,tsx,json,css,scss,less,md}": [
+      "prettier --check --write"
+    ],
+    "packages/**/src/**/*.{js,ts,jsx,tsx}": "pnpm lint",
+    "apps/frontend/src/**/*.{js,ts,jsx,tsx}": "pnpm lint"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "dependencies": {
+    "gauge": "^2.7.4",
+    "react-ace": "^10.1.0"
+  }
+}
