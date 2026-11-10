@@ -15,6 +15,8 @@ import type { ProjectLoaderResult } from '@/loaders/project.loader';
 import BlockContainer from '@/layouts/BlockContainer';
 import { deleteSamples, updateSampleState, createAutoLabelJob, getAutoLabelJobStatus } from '@/api/services/samples';
 import { UserAvatar } from '@/components/UserAvatar';
+import AutoLabelButton from '@/components/AutoLabelButton';
+import type { AutoLabelSelection } from '@/api/services/samples';
 import useMe from '@/hooks/useMe';
 
 import type { ProjectStatusProps } from './components/Statistical';
@@ -76,48 +78,51 @@ const Samples = () => {
     }
   }, []);
 
-  const handleBatchAutoLabel = useCallback(async () => {
-    if (!projectId) return;
-    setIsBatchLabeling(true);
-    try {
-      const response = await createAutoLabelJob(projectId);
-      const job = response.data;
-      setBatchProgress({ processed: 0, total: job.sample_count, success: 0, failed: 0 });
-      message.success(t('batchAutoLabelStarted'));
+  const handleBatchAutoLabel = useCallback(
+    async (selection: AutoLabelSelection) => {
+      if (!projectId) return;
+      setIsBatchLabeling(true);
+      try {
+        const response = await createAutoLabelJob(projectId, selection);
+        const job = response.data;
+        setBatchProgress({ processed: 0, total: job.sample_count, success: 0, failed: 0 });
+        message.success(t('batchAutoLabelStarted'));
 
-      // Start polling
-      pollTimerRef.current = setInterval(async () => {
-        try {
-          const statusResp = await getAutoLabelJobStatus(projectId, job.id);
-          const s = statusResp.data;
-          setBatchProgress({
-            processed: s.processed_count,
-            total: s.sample_count,
-            success: s.success_count,
-            failed: s.failed_count,
-          });
+        // Start polling
+        pollTimerRef.current = setInterval(async () => {
+          try {
+            const statusResp = await getAutoLabelJobStatus(projectId, job.id);
+            const s = statusResp.data;
+            setBatchProgress({
+              processed: s.processed_count,
+              total: s.sample_count,
+              success: s.success_count,
+              failed: s.failed_count,
+            });
 
-          if (s.status === 'COMPLETED' || s.status === 'FAILED') {
+            if (s.status === 'COMPLETED' || s.status === 'FAILED') {
+              stopPolling();
+              setIsBatchLabeling(false);
+              if (s.status === 'FAILED') {
+                message.warning(s.error_message || `AI 标注结束：成功 ${s.success_count}，失败 ${s.failed_count}`);
+              } else {
+                message.success(t('batchAutoLabelCompleted', { success: s.success_count, failed: s.failed_count }));
+              }
+              revalidator.revalidate();
+              setTimeout(() => setBatchProgress(null), 3000);
+            }
+          } catch {
             stopPolling();
             setIsBatchLabeling(false);
-            if (s.status === 'FAILED') {
-              message.warning(s.error_message || `AI 标注结束：成功 ${s.success_count}，失败 ${s.failed_count}`);
-            } else {
-              message.success(t('batchAutoLabelCompleted', { success: s.success_count, failed: s.failed_count }));
-            }
-            revalidator.revalidate();
-            setTimeout(() => setBatchProgress(null), 3000);
+            setBatchProgress(null);
           }
-        } catch {
-          stopPolling();
-          setIsBatchLabeling(false);
-          setBatchProgress(null);
-        }
-      }, 2500);
-    } catch {
-      setIsBatchLabeling(false);
-    }
-  }, [projectId, t, revalidator, stopPolling]);
+        }, 2500);
+      } catch {
+        setIsBatchLabeling(false);
+      }
+    },
+    [projectId, t, revalidator, stopPolling],
+  );
 
   useEffect(() => {
     return () => stopPolling();
@@ -449,9 +454,15 @@ const Samples = () => {
           <FlexLayout justify="space-between">
             <FlexLayout.Item gap="0.5rem" flex items="center">
               {project?.media_type === MediaType.IMAGE && (
-                <Button type="link" onClick={handleBatchAutoLabel} disabled={isBatchLabeling} loading={isBatchLabeling}>
+                <AutoLabelButton
+                  key={projectId}
+                  project={project}
+                  type="link"
+                  onRun={handleBatchAutoLabel}
+                  loading={isBatchLabeling}
+                >
                   {t('batchAutoLabel')}
-                </Button>
+                </AutoLabelButton>
               )}
               {batchProgress && (
                 <Progress

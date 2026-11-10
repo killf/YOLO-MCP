@@ -26,6 +26,7 @@ from backend.application.response.auto_label import (
     AutoLabelJobResponse,
 )
 from backend.application.service.access import assert_project_access
+from backend.application.command.sample import AutoLabelCommand
 from backend.application.service.dataset import dataset_classes
 from backend.common.config import settings
 from backend.common.db import SessionLocal, begin_transaction
@@ -60,6 +61,43 @@ def list_models(
     if algorithm != "yolo":
         return list(ANNOTATION_WEIGHTS.get(algorithm, ()))
     return get_storage().list_models(f"{project.dataset_prefix}/models/")
+
+
+def _select_model(project: Project, cmd: AutoLabelCommand | None) -> tuple[str, str]:
+    """校验本次选择并打印后端控制台日志，返回算法与权重，不更新项目。"""
+    if not settings.USE_AUTO_LABEL:
+        raise HTTPException(400, "AI 标注未启用")
+    algorithm = cmd.algorithm if cmd else project.ai_algorithm
+    model_name = cmd.model_name if cmd else project.ai_model_name
+    if not model_name:
+        raise HTTPException(400, "请选择 AI 标注模型")
+    if algorithm == "yolo":
+        if (
+            PurePosixPath(model_name).name != model_name
+            or PureWindowsPath(model_name).name != model_name
+            or not model_name.endswith(".pt")
+        ):
+            raise HTTPException(422, "请选择 models/ 目录下的权重文件")
+        if (
+            cmd
+            and not get_storage()
+            .path(f"{project.dataset_prefix}/models/{model_name}")
+            .is_file()
+        ):
+            raise HTTPException(404, "所选模型文件不存在")
+    elif model_name not in ANNOTATION_WEIGHTS.get(algorithm, ()):
+        raise HTTPException(422, "所选权重不属于当前自动标注算法")
+
+    if cmd:
+        logger.info(
+            "AI 标注模型选择：project_id={}, 项目默认={}/{}, 本次使用={}/{}",
+            project.id,
+            project.ai_algorithm,
+            project.ai_model_name,
+            algorithm,
+            model_name,
+        )
+    return algorithm, model_name
 
 
 @contextmanager
@@ -241,7 +279,11 @@ def _save_prediction(
 
 
 def _single(
-    db: Session, project_id: int, sample_id: int, user: User
+    db: Session,
+    project_id: int,
+    sample_id: int,
+    user: User,
+    cmd: AutoLabelCommand | None = None,
 ) -> AutoLabelResponse:
     """验证项目和样本，运行一次预测并返回保存后的预标注信息。"""
     project = _project(db, project_id, user)
@@ -249,9 +291,11 @@ def _single(
     if sample is None or sample.project_id != project_id or not sample.file:
         raise HTTPException(404, "标注样本不存在")
 
+    algorithm, model_name = _select_model(project, cmd)
+
     try:
-        with _load_model(db, project, project.ai_model_name) as model:
-            payload = _predict(model, sample, project, project.ai_model_name)
+        with _load_model(db, project, model_name, algorithm) as model:
+            payload = _predict(model, sample, project, model_name, algorithm)
     except HTTPException:
         raise
     except Exception as error:
@@ -268,8 +312,8 @@ def _single(
         project_id=project.id,
         sample_id=sample.id,
         media_type=project.media_type,
-        provider=project.ai_algorithm,
-        model=project.ai_model_name,
+        provider=algorithm,
+        model=model_name,
         pre_annotation_id=annotation_id,
         latency_ms=payload["meta"]["latency_ms"],
         warning_message=payload["meta"]["warning_message"],
@@ -277,20 +321,28 @@ def _single(
 
 
 async def create(
-    db: Session, project_id: int, sample_id: int, current_user: User
+    db: Session,
+    project_id: int,
+    sample_id: int,
+    current_user: User,
+    cmd: AutoLabelCommand | None = None,
 ) -> AutoLabelResponse:
     # 推理在线程中执行，保持页面 API 和批量进度查询可响应。
     """在线程中执行单张预标注，返回结果且不改变样本完成状态。"""
-    return await asyncio.to_thread(_single, db, project_id, sample_id, current_user)
+    return await asyncio.to_thread(
+        _single, db, project_id, sample_id, current_user, cmd
+    )
 
 
 async def create_batch_job(
-    db: Session, project_id: int, current_user: User
+    db: Session,
+    project_id: int,
+    current_user: User,
+    cmd: AutoLabelCommand | None = None,
 ) -> AutoLabelJobResponse:
     """保存待标注样本的批次记录并启动后台处理，返回初始进度。"""
     project = _project(db, project_id, current_user)
-    if not settings.USE_AUTO_LABEL or not project.ai_model_name:
-        raise HTTPException(400, "请启用 AI 标注并在项目配置中选择模型")
+    algorithm, model_name = _select_model(project, cmd)
     dataset_classes(json.loads(project.config))
     sample_ids = [
         sample.id
@@ -305,8 +357,8 @@ async def create_batch_job(
             project_id=project_id,
             user_id=current_user.id,
             sample_count=len(sample_ids),
-            model_name=project.ai_model_name,
-            algorithm=project.ai_algorithm,
+            model_name=model_name,
+            algorithm=algorithm,
         )
         job_id = job.id
 

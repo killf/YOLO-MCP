@@ -2,6 +2,14 @@ from typing import List, Union
 from pydantic import BaseModel, Field
 
 from backend.domain.models.sample import DatasetSplit, SampleState
+from backend.inference import AnnotationAlgorithm
+
+
+class AutoLabelCommand(BaseModel):
+    """指定本次标注使用的算法和权重，不修改项目默认模型。"""
+
+    algorithm: AnnotationAlgorithm
+    model_name: str = Field(min_length=1, description="本次标注的模型权重名称")
 
 
 class CreateSampleCommand(BaseModel):

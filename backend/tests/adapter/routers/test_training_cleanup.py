@@ -31,7 +31,7 @@ def completed_run(training_project, db):
         b"test-only model", f"projects/{training_project}/models/test-cleanup.pt"
     )
     storage.save_bytes(
-        b"test-only log", f"projects/{training_project}/runs/{run_id}/console.log"
+        b"test-only log", f"projects/{training_project}/runs/{run_id}/train.log"
     )
     storage.save_bytes(
         b"intermediate", f"projects/{training_project}/runs/{run_id}/training/last.pt"
@@ -80,7 +80,7 @@ def test_log_response_removes_terminal_control_codes(
 ):
     project_id, run_id = completed_run
     raw = b"\x1b[32mepoch 1\x1b[0m\repoch 2\n"
-    path = f"projects/{project_id}/runs/{run_id}/console.log"
+    path = f"projects/{project_id}/runs/{run_id}/train.log"
     get_storage().save_bytes(raw, path)
     response = client.get(
         f"/api/v1/projects/{project_id}/training-runs/{run_id}/log",
@@ -89,6 +89,11 @@ def test_log_response_removes_terminal_control_codes(
     assert response.status_code == 200
     assert response.text == "epoch 1\nepoch 2\n"
     assert get_storage().read_bytes(path) == raw
+    record = client.get(
+        f"/api/v1/projects/{project_id}/training-runs/{run_id}",
+        headers=testuser_token_headers,
+    ).json()["data"]
+    assert record["log_available"]
 
 
 def test_clear_record_includes_model_and_logs(

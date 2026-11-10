@@ -325,3 +325,41 @@ def test_cli_rejects_bad_json_and_duplicate_options(tmp_path, monkeypatch, value
         train.main()
     assert result.value.code == 2
     worker.assert_not_called()
+
+
+@pytest.mark.parametrize("log_to_stdout", [False, True])
+def test_training_log_has_one_writer_and_preserves_resume(
+    tmp_path, monkeypatch, capsys, log_to_stdout
+):
+    """独立运行自行写日志；页面捕获模式只输出，已有日志不被子进程改写。"""
+    workspace = tmp_path / "run"
+    workspace.mkdir()
+    log = workspace / "train.log"
+    log.write_text("previous epoch\n", encoding="utf-8")
+
+    def fail_dataset(*_args):
+        print("dataset stdout")
+        print("dataset stderr", file=sys.stderr)
+        raise ValueError("synthetic dataset failure")
+
+    monkeypatch.setattr(train, "prepare_dataset", fail_dataset)
+    monkeypatch.setattr(train, "_next_run_id", lambda _directory: "test-log")
+    result = train.run_training(
+        tmp_path,
+        {},
+        work_dir=workspace,
+        resume_checkpoint=workspace / "resume.pt",
+        log_to_stdout=log_to_stdout,
+    )
+    assert result == 1
+    content = log.read_text(encoding="utf-8")
+    assert content.startswith("previous epoch\n")
+    if log_to_stdout:
+        assert content == "previous epoch\n"
+    else:
+        for line in ["dataset stdout", "dataset stderr", "synthetic dataset failure"]:
+            assert content.count(line) == 1
+    captured = capsys.readouterr()
+    assert "dataset stdout" in captured.out
+    assert "dataset stderr" in captured.err
+    assert not (workspace / "console.log").exists()
