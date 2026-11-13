@@ -1,4 +1,4 @@
-"""在独立 Python 进程中训练，记录状态并提供有访问控制的本地日志。"""
+"""在本机或 Kubernetes 中训练，统一保存状态、日志和模型产出。"""
 
 import asyncio
 import importlib.util
@@ -34,6 +34,7 @@ from backend.training.train import (
     training_parameter_catalog,
     validate_training_options,
 )
+from backend.training import kubernetes
 
 _workers: set[asyncio.Task] = set()
 ACTIVE_STATUSES = (
@@ -69,7 +70,10 @@ def _response(run: TrainingRun) -> TrainingRunResponse:
         ),
         log_available=(_workspace(run.project_id, run.id) / "train.log").is_file(),
         pause_available=run.status == TrainingStatus.RUNNING.value
-        and "," not in settings.DEVICE,
+        and (
+            json.loads(run.parameters).get("executor") == "kubernetes"
+            or "," not in settings.DEVICE
+        ),
         resume_available=(
             run.status == TrainingStatus.PAUSED.value
             and (_workspace(run.project_id, run.id) / "resume.pt").is_file()
@@ -89,6 +93,8 @@ async def parameter_catalog(db: Session, project_id: int, user: User) -> list[di
     try:
         return await asyncio.to_thread(training_parameter_catalog)
     except (ImportError, OSError):
+        if settings.KUBECONFIG:
+            return []
         raise HTTPException(503, "当前训练环境无法提供参数说明") from None
 
 
@@ -154,18 +160,21 @@ def _remove_logs(project_id: int, run_id: int) -> None:
         shutil.rmtree(directory)
 
 
-def clear_logs(db: Session, project_id: int, run_id: int, user: User) -> None:
+async def clear_logs(db: Session, project_id: int, run_id: int, user: User) -> None:
     """清理日志和中间文件，保留数据库记录、指标与产出模型。"""
     _, run = _cleanup_run(db, project_id, run_id, user)
     if run.status == TrainingStatus.PAUSED.value:
         raise HTTPException(409, "暂停中的训练需要保留检查点；如需放弃训练，请删除记录")
     try:
+        await kubernetes.cleanup(_workspace(project_id, run_id))
         _remove_logs(project_id, run_id)
+    except (kubernetes.KubernetesError, TimeoutError):
+        raise HTTPException(503, "远端 Pod 清理失败，本地记录和日志已保留") from None
     except OSError:
         raise HTTPException(500, "日志清理失败，请检查文件权限后重试") from None
 
 
-def delete_run(db: Session, project_id: int, run_id: int, user: User) -> None:
+async def delete_run(db: Session, project_id: int, run_id: int, user: User) -> None:
     """删除执行记录、产出模型和日志；被 AI 或其他训练引用的模型不能清理。"""
     project, run = _cleanup_run(db, project_id, run_id, user)
     model = None
@@ -200,11 +209,14 @@ def delete_run(db: Session, project_id: int, run_id: int, user: User) -> None:
 
     # 文件删除失败时回滚数据库记录，允许用户重试清理。
     try:
+        await kubernetes.cleanup(_workspace(project_id, run_id))
         with begin_transaction(db):
             _remove_logs(project_id, run_id)
             if model is not None:
                 model.unlink(missing_ok=True)
             db.delete(run)
+    except (kubernetes.KubernetesError, TimeoutError):
+        raise HTTPException(503, "远端 Pod 清理失败，本地记录和文件已保留") from None
     except OSError:
         raise HTTPException(500, "执行记录清理失败，请检查文件权限后重试") from None
 
@@ -229,7 +241,7 @@ def get_log(db: Session, project_id: int, run_id: int, user: User) -> str:
 async def start(
     db: Session, project_id: int, cmd: StartTrainingCommand, user: User
 ) -> TrainingRunResponse:
-    """检查完成样本和初始模型，保存训练记录后异步启动本机训练。"""
+    """检查完成样本和初始模型，冻结执行后端与数据后异步启动训练。"""
     # 1. 同一项目已有训练时明确返回状态；不创建GPU 预留记录。
     project = _project(db, project_id, user)
     try:
@@ -248,14 +260,21 @@ async def start(
     )
     if active is not None:
         raise HTTPException(409, "该项目已有训练正在进行，请查看训练记录")
-    if importlib.util.find_spec("ultralytics") is None:
-        raise HTTPException(503, "当前后端 Python 环境尚未安装训练依赖")
-    try:
-        await asyncio.to_thread(validate_training_options, cmd.extra_params)
-    except ImportError:
-        raise HTTPException(503, "当前后端 Python 环境无法加载训练依赖") from None
-    except (ValueError, TypeError) as error:
-        raise HTTPException(422, str(error)) from None
+    remote = settings.KUBECONFIG is not None
+    if remote:
+        try:
+            kubernetes.validate_environment(settings.KUBECONFIG)
+        except kubernetes.KubernetesError as error:
+            raise HTTPException(503, str(error)) from None
+    else:
+        if importlib.util.find_spec("ultralytics") is None:
+            raise HTTPException(503, "当前后端 Python 环境尚未安装训练依赖")
+        try:
+            await asyncio.to_thread(validate_training_options, cmd.extra_params)
+        except ImportError:
+            raise HTTPException(503, "当前后端 Python 环境无法加载训练依赖") from None
+        except (ValueError, TypeError) as error:
+            raise HTTPException(422, str(error)) from None
     if not project.config:
         raise HTTPException(422, "请先完成标注配置")
     splits = {
@@ -286,7 +305,12 @@ async def start(
                 project_id=project_id,
                 created_by=user.id,
                 initial_model=cmd.initial_model,
-                parameters=json.dumps(cmd.model_dump()),
+                parameters=json.dumps(
+                    {
+                        **cmd.model_dump(),
+                        **({"executor": "kubernetes"} if remote else {}),
+                    }
+                ),
                 status=TrainingStatus.PENDING.value,
             )
             db.add(run)
@@ -295,6 +319,16 @@ async def start(
             _workspace(project_id, run_id).mkdir(parents=True, exist_ok=False)
             workspace_created = True
             create_run_dataset(db, project, _workspace(project_id, run_id) / "dataset")
+            if remote:
+                kubernetes.prepare(
+                    _workspace(project_id, run_id),
+                    settings.KUBECONFIG,
+                    settings.K8S_NAMESPACE,
+                    settings.K8S_IMAGE,
+                    vci_instance_family=settings.K8S_VCI_INSTANCE_FAMILY,
+                    vci_gpu_driver_version=settings.K8S_VCI_GPU_DRIVER_VERSION,
+                    vci_zone=settings.K8S_VCI_ZONE,
+                )
     except Exception as error:
         if workspace_created:
             try:
@@ -347,7 +381,8 @@ async def resume(
     response = get_run(db, project_id, run_id, user)
     if not response.resume_available:
         raise HTTPException(409, "训练未暂停或检查点已丢失，无法继续")
-    if importlib.util.find_spec("ultralytics") is None:
+    remote = response.parameters.get("executor") == "kubernetes"
+    if not remote and importlib.util.find_spec("ultralytics") is None:
         raise HTTPException(503, "当前后端 Python 环境尚未安装训练依赖")
     active = (
         db.query(TrainingRun)
@@ -361,6 +396,8 @@ async def resume(
         raise HTTPException(409, "该项目已有训练正在进行，请先暂停或等待完成")
     workspace = _workspace(project_id, run_id)
     try:
+        if remote:
+            await kubernetes.cleanup(workspace)
         with begin_transaction(db):
             changed = (
                 db.query(TrainingRun)
@@ -378,8 +415,14 @@ async def resume(
             )
             if not changed:
                 raise HTTPException(409, "训练状态已变化，请刷新记录")
+            if remote:
+                kubernetes.prepare_resume(workspace)
             (workspace / "pause.request").unlink(missing_ok=True)
             (workspace / "result.json").unlink(missing_ok=True)
+    except kubernetes.KubernetesError as error:
+        raise HTTPException(503, str(error)) from None
+    except TimeoutError:
+        raise HTTPException(503, "远端 Pod 清理超时，检查点已保留") from None
     except OSError:
         raise HTTPException(500, "无法准备恢复训练，请检查运行目录后重试") from None
     db.expire_all()
@@ -389,8 +432,9 @@ async def resume(
 
 
 async def _run(run_id: int) -> None:
-    """准备独立工作目录与子进程，保存退出状态和结构化模型产物。"""
+    """准备工作目录并执行本机或远端训练，保存退出状态和结构化模型产物。"""
     process = None
+    remote = False
     with SessionLocal() as db:
         run = db.get(TrainingRun, run_id)
         if run is None:
@@ -408,38 +452,39 @@ async def _run(run_id: int) -> None:
                     f"{project.dataset_prefix}/models/{run.initial_model}"
                 )
             parameters = json.loads(run.parameters)
+            remote = parameters.get("executor") == "kubernetes"
             checkpoint = workspace / "resume.pt"
             resuming = checkpoint.is_file()
             prefix = project.dataset_prefix
             with begin_transaction(db):
-                run.status = TrainingStatus.RUNNING.value
+                if run.status != TrainingStatus.PAUSING.value:
+                    run.status = TrainingStatus.RUNNING.value
                 if run.started_at is None:
                     run.started_at = datetime.now()
 
             # 2. 参数通过数组传入独立进程，不经过 shell，不接收任意用户命令。
-            environment = os.environ.copy()
-            environment.update(
-                {
-                    "YOLO_AUTOINSTALL": "false",
-                    "PYTHONUNBUFFERED": "1",
-                    "PYTHONIOENCODING": "utf-8",
-                    "YOLO_CONFIG_DIR": str(get_storage().path(".ultralytics")),
-                }
+            training_workspace = (
+                PurePosixPath("/workspace/run") if remote else workspace
+            )
+            models_directory = (
+                PurePosixPath("/workspace/models")
+                if remote
+                else get_storage().path(f"{prefix}/models")
             )
             args = [
-                sys.executable,
+                "python" if remote else sys.executable,
                 "-m",
                 "backend.training.train",
                 "--data",
-                str(workspace / "dataset"),
+                str(training_workspace / "dataset"),
                 "--models-dir",
-                str(get_storage().path(f"{prefix}/models")),
+                str(models_directory),
                 "--work-dir",
-                str(workspace),
+                str(training_workspace),
                 "--result-file",
-                str(workspace / "result.json"),
+                str(training_workspace / "result.json"),
                 "--model",
-                str(model),
+                "/workspace/initial.pt" if remote else str(model),
                 "--epochs",
                 str(parameters["epochs"]),
                 "--imgsz",
@@ -449,7 +494,9 @@ async def _run(run_id: int) -> None:
                 "--workers",
                 "0",
             ]
-            if settings.DEVICE:
+            if remote:
+                args.extend(["--device", "0"])
+            elif settings.DEVICE:
                 args.extend(["--device", settings.DEVICE])
             args.extend(
                 [
@@ -465,7 +512,9 @@ async def _run(run_id: int) -> None:
                 ]
             )
             if resuming:
-                args.extend(["--resume-checkpoint", str(checkpoint)])
+                args.extend(
+                    ["--resume-checkpoint", str(training_workspace / "resume.pt")]
+                )
             if parameters.get("lr0") is not None:
                 args.extend(["--lr0", str(parameters["lr0"])])
             if parameters.get("extra_params"):
@@ -476,15 +525,35 @@ async def _run(run_id: int) -> None:
                     ]
                 )
             args.append("--log-to-stdout")
-            with (workspace / "train.log").open("ab" if resuming else "wb") as output:
-                process = await asyncio.create_subprocess_exec(
-                    *args,
-                    cwd=str(Path(__file__).resolve().parents[3]),
-                    env=environment,
-                    stdout=output,
-                    stderr=asyncio.subprocess.STDOUT,
+            if remote:
+                code = await kubernetes.execute(
+                    workspace,
+                    get_storage().path(f"{prefix}/models"),
+                    str(model),
+                    get_storage().path("models/ultralytics"),
+                    args,
                 )
-                code = await process.wait()
+            else:
+                environment = os.environ.copy()
+                environment.update(
+                    {
+                        "YOLO_AUTOINSTALL": "false",
+                        "PYTHONUNBUFFERED": "1",
+                        "PYTHONIOENCODING": "utf-8",
+                        "YOLO_CONFIG_DIR": str(get_storage().path(".ultralytics")),
+                    }
+                )
+                with (workspace / "train.log").open(
+                    "ab" if resuming else "wb"
+                ) as output:
+                    process = await asyncio.create_subprocess_exec(
+                        *args,
+                        cwd=str(Path(__file__).resolve().parents[3]),
+                        env=environment,
+                        stdout=output,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    code = await process.wait()
 
             # 3. 只有训练退出成功且结果文件可读时，记录模型与指标。
             with begin_transaction(db):
@@ -514,6 +583,9 @@ async def _run(run_id: int) -> None:
                     else datetime.now()
                 )
         except asyncio.CancelledError:
+            if remote:
+                # 远端训练独立运行；保留活动状态，服务启动后只恢复监控和回收。
+                raise
             if process is not None and process.returncode is None:
                 process.terminate()
                 await process.wait()
@@ -526,34 +598,54 @@ async def _run(run_id: int) -> None:
             logger.error(
                 "Training failed: run_id={}, error={}", run_id, type(error).__name__
             )
+            if isinstance(error, kubernetes.KubernetesError):
+                message = str(error)
+            elif remote:
+                message = "远端执行或传输失败，请检查连接、Pod 状态与训练日志"
+            else:
+                message = "训练执行失败，请查看训练日志与运行环境"
             with begin_transaction(db):
                 run.status = TrainingStatus.FAILED.value
-                run.error_message = "训练执行失败，请查看训练日志与运行环境"
+                run.error_message = message
                 run.finished_at = datetime.now()
 
 
 def fail_interrupted_runs() -> None:
-    """启动时标记上次未完成的训练，不自动重跑 GPU 项目。"""
+    """启动时标记本地中断任务，远端活动任务保留状态等待重新连接。"""
     with SessionLocal() as db, db.begin():
-        db.query(TrainingRun).filter(
-            TrainingRun.status.in_(
-                [
-                    TrainingStatus.PENDING.value,
-                    TrainingStatus.RUNNING.value,
-                    TrainingStatus.PAUSING.value,
-                ]
+        runs = (
+            db.query(TrainingRun)
+            .filter(
+                TrainingRun.status.in_(
+                    [
+                        TrainingStatus.PENDING.value,
+                        TrainingStatus.RUNNING.value,
+                        TrainingStatus.PAUSING.value,
+                    ]
+                )
             )
-        ).update(
-            {
-                TrainingRun.status: TrainingStatus.INTERRUPTED.value,
-                TrainingRun.error_message: "服务重启，训练状态已中断，请确认后重新发起",
-                TrainingRun.finished_at: datetime.now(),
-            }
+            .all()
         )
+        for run in runs:
+            if json.loads(run.parameters).get("executor") == "kubernetes":
+                continue
+            run.status = TrainingStatus.INTERRUPTED.value
+            run.error_message = "服务重启，训练状态已中断，请确认后重新发起"
+            run.finished_at = datetime.now()
+
+
+def reconnect_remote_runs() -> None:
+    """仅调度已有活动远端记录的监控，不创建新的训练记录或自动重跑失败任务。"""
+    with SessionLocal() as db:
+        for run in db.query(TrainingRun).filter(
+            TrainingRun.status.in_(ACTIVE_STATUSES)
+        ):
+            if json.loads(run.parameters).get("executor") == "kubernetes":
+                _schedule(run.id)
 
 
 async def stop_workers() -> None:
-    """服务正常关闭时终止自己启动的训练，等待其状态写入完成。"""
+    """服务关闭时终止本地训练及远端监控，保留 Pod，等待本地状态写入完成。"""
     workers = list(_workers)
     for worker in workers:
         worker.cancel()

@@ -13,11 +13,10 @@ import shutil
 import signal
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TextIO
-from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -280,7 +279,7 @@ def prepare_dataset(dataset: Path, destination: Path, snapshot: Path) -> Path:
 
 def _next_run_id(dataset: Path) -> str:
     """按现有模型和运行目录生成日期编号，不创建占号或锁。"""
-    day = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+    day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d")
     number = 0
     for directory in (dataset / "models", dataset / "runs"):
         for path in directory.glob(f"{day}-*"):

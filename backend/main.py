@@ -83,10 +83,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     run_db_migrations()
 
     from backend.application.service.auto_label import fail_interrupted_jobs
-    from backend.application.service.training import fail_interrupted_runs, stop_workers
+    from backend.application.service.training import (
+        fail_interrupted_runs,
+        reconnect_remote_runs,
+        stop_workers,
+    )
 
     fail_interrupted_jobs()
     fail_interrupted_runs()
+    reconnect_remote_runs()
+
     # SDK 的协议管理器每次启动独立创建，支持同一应用正常关闭后再启动。
     mcp_app = create_http_app()
     mcp_route.app = mcp_app

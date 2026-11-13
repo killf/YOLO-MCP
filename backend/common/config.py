@@ -25,6 +25,25 @@ class Settings(BaseSettings):
     USE_AUTO_LABEL: bool = True
     DEVICE: str = ""  # 留空自动选择 CUDA/ROCm、MPS 或 CPU。
 
+    # 设置 kubeconfig 后，页面和 MCP 训练改为在指定命名空间申请单卡 Pod。
+    KUBECONFIG: Path | None = None
+    K8S_NAMESPACE: str = Field(
+        default="default",
+        min_length=1,
+        max_length=63,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+    )
+    K8S_IMAGE: str = Field(default="ultralytics/ultralytics:latest", min_length=1)
+
+    # 火山 VCI 可选配置；规格族非空时强制调度至 VCI，驱动版本沿用云端默认值或显式指定。
+    K8S_VCI_INSTANCE_FAMILY: str = Field(
+        default="", pattern=r"^(?:vci\.[a-z0-9]+(?:,vci\.[a-z0-9]+)*)?$"
+    )
+    K8S_VCI_GPU_DRIVER_VERSION: str = Field(
+        default="", pattern=r"^(?:tesla-[0-9]+(?:\.[0-9]+)*)?$"
+    )
+    K8S_VCI_ZONE: str = ""  # 留空由调度器选择；可指定有 GPU 配额的可用区。
+
     # 远程部署时显式填写实际域名，保留 MCP 的 Host/Origin 校验。
     MCP_ALLOWED_HOSTS: list[str] = [
         "127.0.0.1",

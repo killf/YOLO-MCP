@@ -319,7 +319,7 @@ async def get_model_download(project_id: int, model_name: str) -> dict:
 async def clear_training_log(project_id: int, run_id: int) -> dict:
     """清理本次运行目录及数据快照，保留记录和模型；仅拥有者或管理员可用。"""
     with authorized_session() as (db, user):
-        training.clear_logs(db, project_id, run_id, user)
+        await training.clear_logs(db, project_id, run_id, user)
         return {"ok": True}
 
 
@@ -327,7 +327,7 @@ async def clear_training_log(project_id: int, run_id: int) -> dict:
 async def delete_training_run(project_id: int, run_id: int) -> dict:
     """删除终态训练记录及其模型、日志；仅拥有者或系统管理员可用。"""
     with authorized_session() as (db, user):
-        training.delete_run(db, project_id, run_id, user)
+        await training.delete_run(db, project_id, run_id, user)
         return {"ok": True}
 
 

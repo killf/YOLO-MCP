@@ -29,7 +29,50 @@ python -m pip install "yolo-mcp[annotation]"
 
 训练使用的字体与 Ultralytics 配置统一缓存到数据根目录下的 `.ultralytics/`，不同项目和每次训练共用，首次缺少字体时下载。数据根目录通过 `YOLO_MCP_DATA_DIR` 设置；离线命令显式设置第三方变量 `YOLO_CONFIG_DIR` 时使用指定目录。
 
-源码开发时，可从仓库根目录执行 `python -m pip install -e "./backend[training]"` 或 `python -m pip install -e "./backend[annotation]"`。页面训练复用启动后端的 Python 环境。
+源码开发时，可从仓库根目录执行 `python -m pip install -e "./backend[training]"` 或 `python -m pip install -e "./backend[annotation]"`。页面本地训练复用启动后端的 Python 环境。
+
+## Kubernetes 远端训练
+
+本机位于局域网、集群位于异地时，可以通过 Kubernetes API 上传数据和模型，无需让 Pod 访问本机地址或开放本机文件服务。运行后端的电脑需安装 `kubectl`，并能通过所选 kubeconfig 访问集群的 API Server，且允许 exec/cp 的流式连接。
+
+在启动后端的 PowerShell 中设置：
+
+```powershell
+$env:YOLO_MCP_KUBECONFIG = "C:/Users/your-name/.kube/config"
+$env:YOLO_MCP_K8S_NAMESPACE = "training"
+$env:YOLO_MCP_K8S_IMAGE = "ultralytics/ultralytics:latest"
+yolo-mcp --host 127.0.0.1 --port 8000
+```
+
+将 kubeconfig 路径和 namespace 替换为实际值。镜像变量可省略，默认使用 Ultralytics 官方 GPU 镜像；自定义镜像需提供 Python 3.11 及以上、pip、tar 和可用的 NVIDIA GPU 版 PyTorch。命名空间需预先创建，集群需已配置 NVIDIA device plugin 并提供 `nvidia.com/gpu` 资源。连接身份需要该命名空间内 Pod 的 get/list/watch/create/delete、日志读取和 exec 权限；应用不创建 namespace，也不修改 RBAC。
+
+设置后，网页和 MCP 发起的训练都在 Kubernetes 上执行，每次申请 1 张 NVIDIA GPU，并使用容器内设备 `0`。`YOLO_MCP_DEVICE` 仍控制本地推理和本地训练；独立的 `yolo-mcp-train` 命令仍在当前机器执行。取消 kubeconfig 配置后，新发起的页面训练恢复本地执行。
+
+火山引擎 VCI 集群还需指定 GPU 规格族。应用会添加强制使用 VCI 的注解、虚拟节点选择条件及相应污点容忍，不使用普通节点。按集群支持的驱动选择兼容的官方镜像，例如 CUDA 12.8 对应的配置：
+
+```powershell
+$env:YOLO_MCP_K8S_VCI_INSTANCE_FAMILY = "vci.gni3"
+$env:YOLO_MCP_K8S_VCI_GPU_DRIVER_VERSION = "tesla-570.195.03"
+$env:YOLO_MCP_K8S_VCI_ZONE = "cn-beijing-a"
+$env:YOLO_MCP_K8S_IMAGE = "ultralytics/ultralytics:8.4.0"
+```
+
+规格族和驱动版本可在火山引擎[GPU 实例创建说明](https://www.volcengine.com/docs/6460/1134299)与[驱动版本说明](https://www.volcengine.com/docs/6460/2279227)中核对。可用区需有相应 GPU 配额，留空时由调度器选择。驱动配置留空时使用 VCI 默认驱动；不配置规格族则使用普通 Kubernetes GPU 调度。`latest` 镜像的 CUDA 版本会随上游更新，应先确认与集群驱动兼容。
+
+训练开始时，本机生成当前项目的数据快照，通过 `kubectl cp` 上传图片、YOLO 标签、初始模型与项目训练代码，上传完成后才启动训练。官方初始权重在本机公共缓存不存在时由本机下载；项目已有模型直接上传。kubeconfig、数据库、签名密钥和本机环境变量不会上传到 Pod。
+
+远端训练不要求本机安装 PyTorch 或 Ultralytics。Pod 启动后安装项目训练代码所需的轻量 Python 依赖，并将 Ultralytics 固定为项目使用的版本，保留镜像内的 GPU 版 PyTorch。因此默认镜像首次运行需要访问 Python 包索引；本机首次下载官方权重需要访问 GitHub。未安装本机 Ultralytics 时，附加参数帮助列表为空，附加参数由远端训练环境校验。
+
+训练日志同步到现有训练记录。暂停请求会传给 Pod，当前 epoch 检查点完成后回收 `resume.pt`，再删除 Pod 释放 GPU；继续训练使用原数据快照和检查点创建新 Pod，沿用原集群 context、namespace 和镜像。服务正常关闭不终止远端训练，服务重启后重新连接活动记录中的同一 Pod，不重新训练。
+
+训练结束后，容器会等待本机取回模型、指标、日志与中间文件，确认落地后才删除 Pod。传输或连接失败时，记录显示失败并保留 Pod；不会自动重跑 GPU 训练。保留的 Pod 仍占用 GPU 配额，且使用的 `emptyDir` 不能抵御 Pod 被删除、节点丢失或驱逐。需要保留产物时应先从 Pod 复制 `/workspace/output.tar`；删除记录或清理日志会同时删除对应 Pod，远端清理失败则保留本地记录供重试。
+
+每条记录的 `runs/<记录 ID>/kubernetes.json` 保存 kubeconfig 的本机路径、所选 context、namespace 与 Pod 名称，不保存认证内容。需要手动排查或取回产物时，在该记录目录执行以下命令，并替换占位符；只有产物打包完成后才会存在 `output.tar`：
+
+```powershell
+kubectl --kubeconfig "C:/Users/your-name/.kube/config" --context "<context>" --namespace "training" logs "<pod-name>" -c trainer
+kubectl --kubeconfig "C:/Users/your-name/.kube/config" --context "<context>" --namespace "training" cp "<pod-name>:/workspace/output.tar" "recovered-output.tar" -c trainer
+```
 
 ## 页面训练参数
 

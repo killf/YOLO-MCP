@@ -23,6 +23,7 @@ def validate_extra_params(value: dict) -> dict:
 
 
 RESERVED_TRAINING_PARAMETERS = {
+    "executor",
     "algorithm",
     "initial_model",
     "model",

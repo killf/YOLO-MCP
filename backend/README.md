@@ -18,6 +18,12 @@ yolo-mcp --host 127.0.0.1 --port 8000
 | `YOLO_MCP_DATABASE_URL` | `YOLO_MCP_DATA_DIR/labels.sqlite` 对应的 SQLite URL | 自定义数据库连接 |
 | `YOLO_MCP_USE_AUTO_LABEL` | `true` | 是否启用 AI 标注 |
 | `YOLO_MCP_DEVICE` | 空 | 自动选择 CUDA/ROCm、MPS 或 CPU；也可指定 `0`、`cuda:0`、`cpu` |
+| `YOLO_MCP_KUBECONFIG` | 未设置 | 设置后，页面与 MCP 训练使用该文件连接的 Kubernetes 集群；不影响本地标注推理 |
+| `YOLO_MCP_K8S_NAMESPACE` | `default` | 训练 Pod 所在的已有命名空间 |
+| `YOLO_MCP_K8S_IMAGE` | `ultralytics/ultralytics:latest` | 由集群拉取的训练镜像，需兼容 NVIDIA GPU；详见[远端训练](training/README.md#kubernetes-远端训练) |
+| `YOLO_MCP_K8S_VCI_INSTANCE_FAMILY` | 空 | 指定火山 GPU 规格族，如 `vci.gni3`，并强制申请 VCI |
+| `YOLO_MCP_K8S_VCI_GPU_DRIVER_VERSION` | 空 | 可选 VCI 驱动版本，如 `tesla-570.195.03`；应与镜像 CUDA 匹配 |
+| `YOLO_MCP_K8S_VCI_ZONE` | 空 | 可选 VCI 可用区，如 `cn-beijing-a`；按该可用区的 GPU 配额创建 |
 
 例如，在 PowerShell 中指定目录和设备：
 

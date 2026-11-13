@@ -113,7 +113,7 @@ async def clear_logs(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    service.clear_logs(db, project_id, run_id, user)
+    await service.clear_logs(db, project_id, run_id, user)
     return OkResp[CommonDataResp](data=CommonDataResp(ok=True))
 
 
@@ -124,5 +124,5 @@ async def delete_run(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    service.delete_run(db, project_id, run_id, user)
+    await service.delete_run(db, project_id, run_id, user)
     return OkResp[CommonDataResp](data=CommonDataResp(ok=True))
